@@ -19,7 +19,7 @@ import { BotAvatar } from './BotAvatar';
 import { BotGroupQuoteBlock } from './BotGroupQuote';
 import {
   BOT_GROUP_COMPOSER_CARD, BOT_GROUP_COMPOSER_COLUMN, BOT_GROUP_COMPOSER_DOCK, BOT_GROUP_COMPOSER_FOOTER, BOT_GROUP_COMPOSER_FOOTER_START, BOT_GROUP_COMPOSER_INPUT,
-  fitBotGroupComposerInput,
+  fitBotGroupComposerInput, useRefitBotGroupComposerInputOnResize,
 } from './botGroupComposerChrome';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { ChatMessageActions, chatErrorKey } from './ChatServerControls';
@@ -86,6 +86,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
   const sending = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => { if (inputRef.current) fitBotGroupComposerInput(inputRef.current); }, [text, sharing]);
+  useRefitBotGroupComposerInputOnResize(inputRef, !sharing);
   const load = useCallback(async (before?: number) => {
     const version = ++request.current, owner = getDataOwnerGeneration();
     const current = () => version === request.current && isDataOwnerGenerationCurrent(owner);

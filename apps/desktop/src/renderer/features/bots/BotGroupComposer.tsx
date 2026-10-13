@@ -76,6 +76,7 @@ import {
   BOT_GROUP_COMPOSER_FOOTER_START,
   BOT_GROUP_COMPOSER_INPUT,
   fitBotGroupComposerInput,
+  useRefitBotGroupComposerInputOnResize,
 } from './botGroupComposerChrome';
 import { botGroupAttachmentSignature, toBotGroupAttachmentInputs } from './botGroupAttachments';
 import {
@@ -243,6 +244,7 @@ export function BotGroupComposer({
       element.setSelectionRange(nextCaret, nextCaret);
     }
   }, [text]);
+  useRefitBotGroupComposerInputOnResize(textareaRef);
 
   const syncCaret = () => {
     const element = textareaRef.current;
