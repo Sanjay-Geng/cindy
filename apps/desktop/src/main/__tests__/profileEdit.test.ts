@@ -1,7 +1,8 @@
 /**
  * profileEdit.test.ts — 个人资料编辑业务体单测(规则 14:全依赖注入,内存直测)。
  * 覆盖:未登录 / 非法参数拒绝、名字收敛(留空/一致 = 不改)、头像三态
- * (keep / set / reset)的 OSS 直传与 PATCH 组装、体积与扩展名校验、
+ * (keep / set / reset)的 OSS 直传与 PATCH 组装、导出字节的类型 / 文件头 / 体积校验、
+ * 选图的扩展名与源图体积校验、
  * 上传 / PATCH 失败的错误码映射、无变化零请求。
  */
 
@@ -9,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import {
   AVATAR_MAX_BYTES,
+  AVATAR_SOURCE_MAX_BYTES,
   chooseAvatarFile,
   cleanupLegacyProfileOverride,
   getProfileEditState,
@@ -20,6 +22,16 @@ import {
 type ProfilePatch = { displayName?: string; avatarUrl?: string | null };
 
 const PUBLIC_URL = 'https://oss.example.invalid/cindy/public/avatar/u1/x.png';
+
+// 头像编辑器导出的字节:只认 PNG / JPEG,且文件头必须与声明的 mime 一致。
+const PNG_HEADER = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_HEADER = [0xff, 0xd8, 0xff, 0xe0];
+const pngBytes = (size = 64) => {
+  const data = new Uint8Array(size);
+  data.set(PNG_HEADER);
+  return data;
+};
+const jpegBytes = () => Uint8Array.from([...JPEG_HEADER, 0, 0, 0, 0]);
 
 function makeDeps(overrides: Partial<ProfileEditDeps> = {}): {
   deps: ProfileEditDeps;
@@ -103,19 +115,21 @@ describe('名字收敛(留空 / 与当前一致 = 不改名)', () => {
 });
 
 describe('头像三态', () => {
-  it('set:读文件 → OSS 直传 → PATCH avatarUrl=publicUrl', async () => {
+  it('set:导出字节原样 OSS 直传 → PATCH avatarUrl=publicUrl(不再读任何文件路径)', async () => {
     const { deps, patches } = makeDeps();
-    await updateProfile(deps, { name: null, avatar: { type: 'set', filePath: 'C:\\pics\\me.PNG' } });
-    expect(deps.uploadAvatar).toHaveBeenCalledWith({
-      buffer: expect.any(Buffer),
-      mimeType: 'image/png',
-    });
+    const data = pngBytes();
+    await updateProfile(deps, { name: null, avatar: { type: 'set', data, mimeType: 'image/png' } });
+    expect(deps.uploadAvatar).toHaveBeenCalledWith({ buffer: data, mimeType: 'image/png' });
+    expect(deps.readFile).not.toHaveBeenCalled();
     expect(patches).toEqual([{ avatarUrl: PUBLIC_URL }]);
   });
 
   it('set + 改名:一次 PATCH 同时带两个字段', async () => {
     const { deps, patches } = makeDeps();
-    await updateProfile(deps, { name: 'Lizi', avatar: { type: 'set', filePath: '/a/b.webp' } });
+    await updateProfile(deps, {
+      name: 'Lizi',
+      avatar: { type: 'set', data: jpegBytes(), mimeType: 'image/jpeg' },
+    });
     expect(patches).toEqual([{ displayName: 'Lizi', avatarUrl: PUBLIC_URL }]);
   });
 
@@ -126,27 +140,27 @@ describe('头像三态', () => {
     expect(deps.uploadAvatar).not.toHaveBeenCalled();
   });
 
-  it('set:扩展名不在白名单(含已退役的 gif)/ 超限 / 空文件 → INVALID_PARAMS,不触发上传', async () => {
+  it('set:类型不在导出白名单 / 文件头与 mime 不符 / 超限 / 空字节 / 非字节数组 → INVALID_PARAMS,不触发上传', async () => {
     const { deps } = makeDeps();
-    for (const filePath of ['/a/b.svg', '/a/b.gif']) {
-      await expect(
-        updateProfile(deps, { name: null, avatar: { type: 'set', filePath } }),
-      ).rejects.toSatisfy((e) => ipcCode(e) === 'INVALID_PARAMS');
+    const oversized = pngBytes(AVATAR_MAX_BYTES + 1);
+    const bad: unknown[] = [
+      { type: 'set', data: pngBytes(), mimeType: 'image/webp' },
+      { type: 'set', data: pngBytes(), mimeType: 'image/gif' },
+      { type: 'set', data: pngBytes(), mimeType: 'image/jpeg' },
+      { type: 'set', data: jpegBytes(), mimeType: 'image/png' },
+      { type: 'set', data: Uint8Array.from([0x89, 0x50]), mimeType: 'image/png' },
+      { type: 'set', data: oversized, mimeType: 'image/png' },
+      { type: 'set', data: new Uint8Array(0), mimeType: 'image/png' },
+      { type: 'set', data: [...PNG_HEADER], mimeType: 'image/png' },
+      { type: 'set', filePath: '/a/b.png' },
+    ];
+    for (const avatar of bad) {
+      await expect(updateProfile(deps, { name: null, avatar })).rejects.toSatisfy(
+        (e) => ipcCode(e) === 'INVALID_PARAMS',
+      );
     }
-
-    (deps.readFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-      Buffer.alloc(AVATAR_MAX_BYTES + 1),
-    );
-    await expect(
-      updateProfile(deps, { name: null, avatar: { type: 'set', filePath: '/a/b.png' } }),
-    ).rejects.toSatisfy((e) => ipcCode(e) === 'INVALID_PARAMS');
-
-    (deps.readFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(Buffer.alloc(0));
-    await expect(
-      updateProfile(deps, { name: null, avatar: { type: 'set', filePath: '/a/b.png' } }),
-    ).rejects.toSatisfy((e) => ipcCode(e) === 'INVALID_PARAMS');
-
     expect(deps.uploadAvatar).not.toHaveBeenCalled();
+    expect(deps.readFile).not.toHaveBeenCalled();
   });
 
   it('上传失败 → PROFILE_AVATAR_UPLOAD_FAILED,不触发 PATCH', async () => {
@@ -158,7 +172,10 @@ describe('头像三态', () => {
       })),
     });
     await expect(
-      updateProfile(deps, { name: null, avatar: { type: 'set', filePath: '/a/b.png' } }),
+      updateProfile(deps, {
+        name: null,
+        avatar: { type: 'set', data: pngBytes(), mimeType: 'image/png' },
+      }),
     ).rejects.toSatisfy((e) => ipcCode(e) === 'PROFILE_AVATAR_UPLOAD_FAILED');
     expect(deps.patchProfile).not.toHaveBeenCalled();
   });
@@ -180,16 +197,31 @@ describe('chooseAvatarFile(选图预校验,不上传)', () => {
     expect(deps.readFile).not.toHaveBeenCalled();
   });
 
-  it('合法图片返回路径 + data URL 预览;不触发上传', async () => {
+  it('合法图片返回 data URL 取景源(不回传本机路径);不触发上传', async () => {
     const { deps } = makeDeps({
       showAvatarOpenDialog: vi.fn(async () => '/pics/me.webp'),
       readFile: vi.fn(async () => Buffer.from('abc')),
     });
     const result = await chooseAvatarFile(deps);
     expect(result.canceled).toBe(false);
-    expect(result.filePath).toBe('/pics/me.webp');
+    expect(result).not.toHaveProperty('filePath');
     expect(result.previewDataUrl).toBe(`data:image/webp;base64,${Buffer.from('abc').toString('base64')}`);
     expect(deps.uploadAvatar).not.toHaveBeenCalled();
+  });
+
+  it('源图体积按选图上限(20MB)校验:超过上传上限但在源图上限内的原片可选', async () => {
+    const { deps } = makeDeps({
+      showAvatarOpenDialog: vi.fn(async () => '/pics/photo.jpg'),
+      readFile: vi.fn(async () => Buffer.alloc(AVATAR_MAX_BYTES + 1)),
+    });
+    await expect(chooseAvatarFile(deps)).resolves.toMatchObject({ canceled: false });
+
+    (deps.readFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      Buffer.alloc(AVATAR_SOURCE_MAX_BYTES + 1),
+    );
+    await expect(chooseAvatarFile(deps)).rejects.toSatisfy((e) => ipcCode(e) === 'INVALID_PARAMS');
+    (deps.readFile as ReturnType<typeof vi.fn>).mockResolvedValueOnce(Buffer.alloc(0));
+    await expect(chooseAvatarFile(deps)).rejects.toSatisfy((e) => ipcCode(e) === 'INVALID_PARAMS');
   });
 
   it('白名单外扩展名拒绝(gif 已随 OSS 场景白名单退役)', async () => {
