@@ -7883,7 +7883,8 @@ describe('CodexAgent MCP thread context hooks', () => {
         result: { outcome: 'reset' },
       });
     };
-    const registerLocalCodexAppServerProcess = vi.fn();
+    const disposeRegistration = vi.fn();
+    const registerLocalCodexAppServerProcess = vi.fn(() => disposeRegistration);
     const prepareCodexExtraSpawnConfig = vi.fn(async () => ({
       extraArgs: [],
       extraEnv: {},
@@ -7903,6 +7904,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       pid: 7_001,
       role: 'control-plane-service',
     });
+    // transport 在进程退出时调用该 disposer 注销登记。
+    expect(createdStdioOptions[0]?.onProcessSpawned?.(7_001)).toBe(disposeRegistration);
     expect(prepareCodexExtraSpawnConfig).toHaveBeenCalledWith([], {
       remoteHostId: undefined,
       credentialMode: 'oauth-bearer',
