@@ -17,6 +17,8 @@ import { refreshBotGroups } from './botGroupStore';
 import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupQuoteBlock } from './BotGroupQuote';
+import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
+import { refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { ChatMessageActions, chatErrorKey } from './ChatServerControls';
 const key = (name: string) => `bots.groupChat.server.${name}`;
@@ -43,9 +45,10 @@ function ThreadMessage({ group, message, quoteSources, shareScope, sharing, onCh
       <p className="text-13 font-medium leading-7 text-[var(--text-primary)]">{message.authorName}</p>
       {/* A 话题 root may itself be a 引用回复; its original lives in the main timeline. */}
       {message.quote ? <BotGroupQuoteBlock display={resolveBotGroupQuote(message.quote, quoteSources)} /> : null}
-      <div className="break-words text-14 leading-relaxed text-[var(--text-primary)]">
+      {message.content.trim() ? <div className="break-words text-14 leading-relaxed text-[var(--text-primary)]">
         <MarkdownRenderer workingDir="" content={message.content} allowPrivilegedLinks={false} />
-      </div>
+      </div> : null}
+      <BotGroupMessageAttachments attachments={message.attachments} align="start" />
       <ChatMessageActions groupId={group.id} shareScope={shareScope} message={message} align="left" onChanged={onChanged} />
     </div>
   </article>;
@@ -91,6 +94,17 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
       setExecutionFailures(result.executionFailures ?? []);
       setReplies(previous => mergeBotGroupMessages(previous, result.replies));
       if (before || replies.length === 0) setHasMore(result.hasMore);
+      if (before === undefined && result.replies.length > 0) {
+        const latestFrom = Math.min(...result.replies.map(message => message.sequence));
+        const refreshed = await refreshPendingBotGroupAttachments(replies, latestFrom, async page => {
+          const earlier = await api().thread({ groupId: group.id, rootId, before: page });
+          return earlier.ok && current() ? earlier.replies : null;
+        });
+        if (refreshed && current()) {
+          const fresh = new Map(refreshed.map(message => [message.sequence, message]));
+          setReplies(previous => previous.map(message => message.sequence < latestFrom ? fresh.get(message.sequence) ?? message : message));
+        }
+      }
     } catch { if (current()) setError(t(key('requestFailed'))); }
   }, [group.id, rootId, t, replies]);
   const loadRef = useRef(load); loadRef.current = load;

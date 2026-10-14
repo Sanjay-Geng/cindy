@@ -22,6 +22,15 @@ Gateway 边界对整块报价校验，非法或无有效币种即整体省略，
 模型快照投影，成功刷新缺字段会移除旧展示；没有新权限、数据库迁移或独立价格缓存。
 两端可独立升级，完整展示需两端支持。字段只用于报价展示，不参与账单或调用授权。
 
+## 群消息附件的结构化投影
+
+Chat Server 群消息投影（Desktop IPC 与 `bot-group-chat` 远程资源共用 `BotGroupMessageView`）的
+`content` 不再包含 `[附件: 文件名]` 占位行，附件只在 `attachments` 里。尚未取到电脑的服务器附件也
+保留一项，`url`、`path` 为 null，并带可选 `state: 'loading' | 'unavailable'`；取到后同一 `id` 换成
+完整附件、`state` 缺省。新版手机解析该字段，在原位置显示「加载中」/「暂时无法加载」，点开说明状态而不当作
+可打开的文件；旧手机忽略该字段，把这一项显示为带文件名的文件条，旧版 Markdown 回退仍为 `📎 文件名`。手机直连同样只从 media 块投影附件，正文不再拼 caption。给伙伴的上下文文本不变。
+不改 channel、能力、服务端 schema、数据库或 Mobile 原生指纹。
+
 ## 手机直连群的设置管理
 
 现有 `bot-group-chat` 数据可选追加 `supportsSettingsManagement`。仅服务器群的新版 Host
