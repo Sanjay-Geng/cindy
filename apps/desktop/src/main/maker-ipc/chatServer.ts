@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { migrateLocalGroups } from './chatServerMigration.js';
-import { chatErrorDiagnostic, chatGroupFailure } from './chatServerErrors.js';
+import { chatErrorDiagnostic, chatGroupFailure, missingGroupCode } from './chatServerErrors.js';
 import { createChatMedia } from './chatServerMedia.js';
 import { chatServerWorkspaces } from './chatServerWorkspaces.js';
 import { buildPlanStepBrief } from './botGroupDivision.js';
@@ -505,16 +505,20 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       reconnectDelay = Math.min(reconnectDelay * 2, 15000);
     });
   }
-  async function snapshot(roomId: string) {
+  async function readSnapshot(roomId: string) {
     id.parse(roomId); await register();
-    const value = await api<Snapshot>(`/conversations/${roomId}/snapshot`);
+    return api<Snapshot>(`/conversations/${roomId}/snapshot`);
+  }
+  async function snapshot(roomId: string) {
+    const value = await readSnapshot(roomId);
     subscribe(roomId, value.cursor);
     return value;
   }
-  /** A room read through a bot-group entry point; any other kind answers as a missing group. */
+  /** A room read through a bot-group entry point; any other kind answers as a missing group and is never subscribed. */
   async function groupSnapshot(roomId: string) {
-    const value = await snapshot(roomId);
+    const value = await readSnapshot(roomId);
     if (!isGroupRoom(value.room)) throw new Error('NOT_A_GROUP');
+    subscribe(roomId, value.cursor);
     return value;
   }
   function managementActor(s: Snapshot) {
@@ -1159,7 +1163,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   }
   const result = async <T>(fn: () => Promise<T>) => {
     try { return { ok: true as const, ...await fn() }; }
-    catch (error) { return { ok: false as const, errorCode: error instanceof z.ZodError ? 'INVALID_INPUT' : error instanceof Error ? error.message : 'REQUEST_FAILED' }; }
+    catch (error) { return { ok: false as const, errorCode: error instanceof z.ZodError ? 'INVALID_INPUT' : error instanceof Error ? missingGroupCode(error.message) : 'REQUEST_FAILED' }; }
   };
   const inviteToken = (link: string) => z.string().regex(/^[A-Za-z0-9_-]{43}$/).parse(
     z.string().max(100).parse(link).trim().replace(/^cindy:\/\/chat-invite\//, ''),
